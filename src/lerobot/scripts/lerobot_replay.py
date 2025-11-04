@@ -42,6 +42,7 @@ lerobot-replay \
 import logging
 import time
 from dataclasses import asdict, dataclass
+from numbers import Number
 from pathlib import Path
 from pprint import pformat
 
@@ -54,6 +55,7 @@ from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
     bi_so100_follower,
+    elite,
     hope_jr,
     koch_follower,
     make_robot_from_config,
@@ -106,6 +108,11 @@ def replay(cfg: ReplayConfig):
     robot.connect()
 
     log_say("Replaying episode", cfg.play_sounds, blocking=True)
+
+    initial_interpolation_steps = 1000
+    initial_interpolation_duration_s = 5.0
+    initial_sleep_per_step = initial_interpolation_duration_s / initial_interpolation_steps
+
     for idx in range(len(episode_frames)):
         start_episode_t = time.perf_counter()
 
@@ -117,6 +124,26 @@ def replay(cfg: ReplayConfig):
         robot_obs = robot.get_observation()
 
         processed_action = robot_action_processor((action, robot_obs))
+
+        if idx == 0:
+            # Interpolate from the current robot position to the first action target.
+            starting_action = {}
+            for key, target_value in processed_action.items():
+                obs_value = robot_obs.get(key)
+                if isinstance(obs_value, Number):
+                    starting_action[key] = float(obs_value)
+                else:
+                    starting_action[key] = float(target_value)
+
+            for step in range(1, initial_interpolation_steps + 1):
+                alpha = step / initial_interpolation_steps
+                interpolated_action = {
+                    key: starting_action[key] + (float(processed_action[key]) - starting_action[key]) * alpha
+                    for key in processed_action
+                }
+                robot.send_action(interpolated_action)
+                busy_wait(initial_sleep_per_step)
+            continue
 
         _ = robot.send_action(processed_action)
 
